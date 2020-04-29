@@ -1141,7 +1141,7 @@ append_dropbear() {
 		gen_die "--ssh-host-keys value '${SSH_HOST_KEYS}' is unsupported!"
 	elif [[ "${SSH_HOST_KEYS}" == 'create' ]]
 
-append_yubikey {
+append_yubikey() {
 	local _yubikey_error_format="Yubikey support cannot be included: %s.  Please emerge sys-auth/ykpers."
 	local _ykchalresp_source=/usr/bin/ykchalresp
 	local _ykchalresp_dest=/usr/bin/ykchalresp
@@ -1534,6 +1534,7 @@ create_initramfs() {
 	append_data 'lvm' "${LVM}"
 	append_data 'mdadm' "${MDADM}"
 	append_data 'modprobed'
+	append_data 'yubikey' "${YUBIKEY}"
 	append_data 'multipath' "${MULTIPATH}"
 	append_data 'splash' "${SPLASH}"
 	append_data 'strace' "${STRACE}"
@@ -1541,7 +1542,7 @@ create_initramfs() {
 	append_data 'xfsprogs' "${XFSPROGS}"
 	append_data 'zfs' "${ZFS}"
 
-	if isTrue "${ZFS}"
+	if isTrue "${ZFS}" || isTrue "${LUKS}" || isTrue "${YUBIKEY}"
 	then
 		append_data 'libgcc_s'
 	fi
