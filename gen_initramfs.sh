@@ -1140,6 +1140,285 @@ append_dropbear() {
 	then
 		gen_die "--ssh-host-keys value '${SSH_HOST_KEYS}' is unsupported!"
 	elif [[ "${SSH_HOST_KEYS}" == 'create' ]]
+	then
+		dropbear_command=dropbearkey
+	else
+		dropbear_command=dropbearconvert
+	fi
+
+	if [ -z "${DROPBEAR_AUTHORIZED_KEYS_FILE}" ]
+	then
+		gen_die "Something went wrong: DROPBEAR_AUTHORIZED_KEYS_FILE should already been set but is missing!"
+	fi
+
+	populate_binpkg ${PN}
+
+	mkdir -p "${TDIR}" || gen_die "Failed to create '${TDIR}'!"
+
+	unpack "$(get_gkpkg_binpkg "${PN}")" "${TDIR}"
+
+	if [[ "${SSH_HOST_KEYS}" == 'runtime' ]]
+	then
+		print_info 2 "$(get_indent 2)${PN}: >> No SSH host key embedded due to --ssh-host-key=runtime; Dropbear will generate required host key(s) at runtime!"
+	else
+		if ! hash ssh-keygen &>/dev/null
+		then
+			gen_die "'ssh-keygen' program is required but missing!"
+		fi
+
+		local initramfs_dropbear_dir="${TDIR}/etc/dropbear"
+
+		if [[ "${SSH_HOST_KEYS}" == 'create-from-host' ]]
+		then
+			print_info 3 "$(get_indent 2)${PN}: >> Checking for existence of all SSH host keys ..."
+			local missing_ssh_host_keys=no
+
+			if [ ! -f "/etc/ssh/ssh_host_rsa_key" ]
+			then
+				print_info 3 "$(get_indent 2)${PN}: >> SSH host key '/etc/ssh/ssh_host_rsa_key' is missing!"
+				missing_ssh_host_keys=yes
+			fi
+
+			if [ ! -f "/etc/ssh/ssh_host_ecdsa_key" ]
+			then
+				print_info 3 "$(get_indent 2)${PN}: >> SSH host key '/etc/ssh/ssh_host_ecdsa_key' is missing!"
+				missing_ssh_host_keys=yes
+			fi
+
+			if isTrue "${missing_ssh_host_keys}"
+			then
+				# Should only happen when installing a new system ...
+				print_info 3 "$(get_indent 2)${PN}: >> Creating missing SSH host key(s) ..."
+				ssh-keygen -A || gen_die "Failed to generate host's SSH host key(s) using 'ssh-keygen -A'!"
+			fi
+		fi
+
+		local -a required_dropbear_host_keys=(
+			/etc/dropbear/dropbear_ecdsa_host_key
+			/etc/dropbear/dropbear_rsa_host_key
+		)
+
+		local i=0
+		local n_required_dropbear_keys=${#required_dropbear_host_keys[@]}
+		local required_key=
+		while [[ ${i} < ${n_required_dropbear_keys} ]]
+		do
+			required_key=${required_dropbear_host_keys[${i}]}
+			print_info 3 "$(get_indent 2)${PN}: >> Checking for existence of dropbear host key '${required_key}' ..."
+			if [[ -f "${required_key}" ]]
+			then
+				if [[ ! -s "${required_key}" ]]
+				then
+					print_info 1 "$(get_indent 2)${PN}: >> Dropbear host key '${required_key}' exists but is empty; Removing ..."
+					rm "${required_key}" || gen_die "Failed to remove invalid '${required_key}' null byte file!"
+				elif [[ "${SSH_HOST_KEYS}" == 'create-from-host' ]] \
+					&& [[ "${required_key}" == *_rsa_* ]] \
+					&& [[ "${required_key}" -ot "/etc/ssh/ssh_host_rsa_key" ]]
+				then
+					print_info 1 "$(get_indent 2)${PN}: >> Dropbear host key '${required_key}' exists but is older than '/etc/ssh/ssh_host_rsa_key'; Removing to force update due to --ssh-host-key=create-from-host ..."
+					rm "${required_key}" || gen_die "Failed to remove outdated '${required_key}' file!"
+				elif [[ "${SSH_HOST_KEYS}" == 'create-from-host' ]] \
+					&& [[ "${required_key}" == *_ecdsa_* ]] \
+					&& [[ "${required_key}" -ot "/etc/ssh/ssh_host_ecdsa_key" ]]
+				then
+					print_info 1 "$(get_indent 2)${PN}: >> Dropbear host key '${required_key}' exists but is older than '/etc/ssh/ssh_host_ecdsa_key'; Removing to force update due to --ssh-host-key=create-from-host ..."
+					rm "${required_key}" || gen_die "Failed to remove outdated '${required_key}' file!"
+				else
+					print_info 3 "$(get_indent 2)${PN}: >> Dropbear host key '${required_key}' exists!"
+					unset required_dropbear_host_keys[${i}]
+				fi
+			else
+				print_info 3 "$(get_indent 2)${PN}: >> Dropbear host key '${required_key}' is missing! Will create ..."
+			fi
+
+			i=$((i + 1))
+		done
+
+		if [[ ${#required_dropbear_host_keys[@]} -gt 0 ]]
+		then
+			if isTrue "$(can_run_programs_compiled_by_genkernel)"
+			then
+				dropbear_command="${TDIR}/usr/bin/${dropbear_command}"
+				print_info 3 "$(get_indent 2)${PN}: >> Will use '${dropbear_command}' to create missing keys ..."
+			elif hash ${dropbear_command} &>/dev/null
+			then
+				print_info 3 "$(get_indent 2)${PN}: >> Will use existing '${dropbear_command}' program from path to create missing keys ..."
+			else
+				local error_msg="Need to generate '${required_host_keys[*]}' but '${dropbear_command}'"
+				error_msg=" program is missing. Please install net-misc/dropbear and re-run genkernel!"
+				gen_die "${error_msg}"
+			fi
+
+			local missing_key=
+			for missing_key in ${required_dropbear_host_keys[@]}
+			do
+				dropbear_create_key "${missing_key}" "${dropbear_command}"
+
+				# just in case ...
+				if [ -f "${missing_key}" ]
+				then
+					print_info 3 "$(get_indent 2)${PN}: >> Dropbear host key '${missing_key}' successfully created!"
+				else
+					gen_die "Sanity check failed: '${missing_key}' should exist at this stage but does NOT."
+				fi
+			done
+		else
+			print_info 2 "$(get_indent 2)${PN}: >> Using existing dropbear host keys from /etc/dropbear ..."
+		fi
+
+		cp -aL --target-directory "${initramfs_dropbear_dir}" /etc/dropbear/{dropbear_rsa_host_key,dropbear_ecdsa_host_key} \
+			|| gen_die "Failed to copy '/etc/dropbear/{dropbear_rsa_host_key,dropbear_ecdsa_host_key}'"
+
+		# Try to show embedded dropbear host key details for security reasons.
+		# We do it that complicated to get common used formats.
+		local -a key_info_files=()
+		local -a missing_key_info_files=()
+
+		local host_key_file= host_key_file_checksum= host_key_info_file=
+		while IFS= read -r -u 3 -d $'\0' host_key_file
+		do
+			host_key_file_checksum=$(sha256sum "${host_key_file}" 2>/dev/null | awk '{print $1}')
+			if [ -z "${host_key_file_checksum}" ]
+			then
+				gen_die "Failed to generate SHA256 checksum of '${host_key_file}'!"
+			fi
+
+			host_key_info_file="${GK_V_CACHEDIR}/$(basename "${host_key_file}").${host_key_file_checksum:0:10}.info"
+
+			if [ ! -s "${host_key_info_file}" ]
+			then
+				missing_key_info_files+=( ${host_key_info_file} )
+			else
+				key_info_files+=( ${host_key_info_file} )
+			fi
+		done 3< <(find "${initramfs_dropbear_dir}" -type f -name '*_key' -print0 2>/dev/null)
+		unset host_key_file host_key_file_checksum host_key_info_file
+		IFS="${GK_DEFAULT_IFS}"
+
+		if [[ ${#missing_key_info_files[@]} -ne 0 ]]
+		then
+			dropbear_command=
+			if isTrue "$(can_run_programs_compiled_by_genkernel)"
+			then
+				dropbear_command="${TDIR}/usr/bin/dropbearconvert"
+				print_info 3 "$(get_indent 2)${PN}: >> Will use '${dropbear_command}' to extract embedded host key information ..."
+			elif hash dropbearconvert &>/dev/null
+			then
+				dropbear_command=dropbearconvert
+				print_info 3 "$(get_indent 2)${PN}: >> Will use existing '${dropbear_command}' program to extract embedded host key information ..."
+			else
+				print_warning 2 "$(get_indent 2)${PN}: >> 'dropbearconvert' program not available; Cannot generate missing key information for ${#missing_key_info_files[@]} key(s)!"
+			fi
+
+			if [[ -n "${dropbear_command}" ]]
+			then
+				# We are missing at least information for one embedded key
+				# but looks like we are able to generate the missing information ...
+				local missing_key_info_file=
+				for missing_key_info_file in "${missing_key_info_files[@]}"
+				do
+					dropbear_generate_key_info_file "${dropbear_command}" "${missing_key_info_file}" "${initramfs_dropbear_dir}"
+					key_info_files+=( ${missing_key_info_file} )
+				done
+				unset missing_key_info_file
+			fi
+		fi
+
+		if [[ ${#key_info_files[@]} -gt 0 ]]
+		then
+			# We have at least information about one embedded key ...
+			print_info 1 "=================================================================" 1 0 1
+			print_info 1 "This initramfs' sshd will use the following host key(s):" 1 0 1
+
+			local key_info_file=
+			for key_info_file in "${key_info_files[@]}"
+			do
+				print_info 1 "$(cat "${key_info_file}")" 1 0 1
+			done
+			unset key_info_file
+
+			if [ ${LOGLEVEL} -lt 3 ]
+			then
+				# Don't clash with output from log_future_cpio_content
+				print_info 1 "=================================================================" 1 0 1
+			fi
+		else
+			print_warning 2 "$(get_indent 2)${PN}: >> No information about embedded SSH host key(s) available."
+		fi
+	fi
+
+	if isTrue "$(is_glibc)"
+	then
+		local libdir=$(get_chost_libdir)
+		mkdir -p "${TDIR}"/lib || gen_die "Failed to create '${TDIR}/lib'!"
+		copy_system_binaries "${TDIR}"/lib "${libdir}"/libnss_files.so
+	fi
+
+	cd "${TDIR}" || gen_die "Failed to chdir to '${TDIR}'!"
+
+	cp -a "${GK_SHARE}"/defaults/login-remote.sh "${TDIR}"/usr/bin/ \
+		|| gen_die "Failed to copy '${GK_SHARE}/defaults/login-remote.sh'"
+
+	cp -a "${GK_SHARE}"/defaults/resume-boot.sh "${TDIR}"/usr/sbin/resume-boot \
+		|| gen_die "Failed to copy '${GK_SHARE}/defaults/resume-boot.sh' to '${TDIR}/usr/sbin/resume-boot'"
+
+	cp -a "${GK_SHARE}"/defaults/unlock-luks.sh "${TDIR}"/usr/sbin/unlock-luks \
+		|| gen_die "Failed to copy '${GK_SHARE}/defaults/unlock-luks.sh' to '${TDIR}/usr/sbin/unlock-luks'"
+
+	cp -a "${GK_SHARE}"/defaults/unlock-zfs.sh "${TDIR}"/usr/sbin/unlock-zfs \
+		|| gen_die "Failed to copy '${GK_SHARE}/defaults/unlock-zfs.sh' to '${TDIR}/usr/sbin/unlock-zfs'"
+
+	cp -aL "${DROPBEAR_AUTHORIZED_KEYS_FILE}" "${TDIR}"/root/.ssh/ \
+		|| gen_die "Failed to copy '${DROPBEAR_AUTHORIZED_KEYS_FILE}'!"
+
+	cp -aL /etc/localtime "${TDIR}"/etc/ \
+		|| gen_die "Failed to copy '/etc/localtime'. Please set system's timezone!"
+
+	echo "root:x:0:0:root:/root:/usr/bin/login-remote.sh" > "${TDIR}"/etc/passwd \
+		|| gen_die "Failed to create '/etc/passwd'!"
+
+	echo "/usr/bin/login-remote.sh" > "${TDIR}"/etc/shells \
+		|| gen_die "Failed to create '/etc/shells'!"
+
+	echo "root:!:0:0:99999:7:::" > "${TDIR}"/etc/shadow \
+		|| gen_die "Failed to create '/etc/shadow'!"
+
+	echo "root:x:0:root" > "${TDIR}"/etc/group \
+		|| gen_die "Failed to create '/etc/group'!"
+
+	chmod 0755 "${TDIR}"/usr/bin/login-remote.sh \
+		|| gen_die "Failed to chmod of '${TDIR}/usr/bin/login-remote.sh'!"
+
+	chmod 0755 "${TDIR}"/usr/sbin/resume-boot \
+		|| gen_die "Failed to chmod of '${TDIR}/usr/sbin/resume-boot'!"
+
+	chmod 0755 "${TDIR}"/usr/sbin/unlock-luks \
+		|| gen_die "Failed to chmod of '${TDIR}/usr/sbin/unlock-luks'!"
+
+	chmod 0755 "${TDIR}"/usr/sbin/unlock-zfs \
+		|| gen_die "Failed to chmod of '${TDIR}/usr/sbin/unlock-zfs'!"
+
+	chmod 0640 "${TDIR}"/etc/shadow \
+		|| gen_die "Failed to chmod of '${TDIR}/etc/shadow'!"
+
+	chmod 0644 "${TDIR}"/etc/passwd \
+		|| gen_die "Failed to chmod of '${TDIR}/etc/passwd'!"
+
+	chmod 0644 "${TDIR}"/etc/group \
+		|| gen_die "Failed to chmod of '${TDIR}/etc/group'!"
+
+	cd "${TDIR}" || gen_die "Failed to chdir to '${TDIR}'!"
+	log_future_cpio_content
+
+	find . -print0 | "${CPIO_COMMAND}" ${CPIO_ARGS} --append -F "${CPIO_ARCHIVE}" \
+		|| gen_die "Failed to append ${PN} to cpio!"
+
+	cd "${TEMP}" || die "Failed to chdir to '${TEMP}'!"
+	if isTrue "${CLEANUP}"
+	then
+		rm -rf "${TDIR}"
+	fi
+}
 
 append_yubikey() {
 	local _yubikey_error_format="Yubikey support cannot be included: %s.  Please emerge sys-auth/ykpers."
