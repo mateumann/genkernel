@@ -377,6 +377,7 @@ append_base_layout() {
 	isTrue "${STRACE}" && build_parameters+=( --strace ) || build_parameters+=( --no-strace )
 	isTrue "${GPG}" && build_parameters+=( --gpg ) || build_parameters+=( --no-gpg )
 	isTrue "${LUKS}" && build_parameters+=( --luks ) || build_parameters+=( --no-luks )
+	isTrue "${YUBIKEY}" && build_parameters+=( --yubikey ) || build_parameters+=( --no-yubikey )
 	isTrue "${FIRMWARE}" && build_parameters+=( --firmware ) || build_parameters+=( --no-firmware )
 	[ -n "${FIRMWARE_DIR}" ] && build_parameters+=( --firmware-dir="${FIRMWARE_DIR}" )
 	[ -n "${FIRMWARE_FILES}" ] && build_parameters+=( --firmware-files="${FIRMWARE_FILES}" )
@@ -1421,33 +1422,39 @@ append_dropbear() {
 }
 
 append_yubikey() {
+	local PN=yubikey
+	local TDIR="${TEMP}/initramfs-${PN}-temp"
 	local _yubikey_error_format="Yubikey support cannot be included: %s.  Please emerge sys-auth/ykpers."
 	local _ykchalresp_source=/usr/bin/ykchalresp
 	local _ykchalresp_dest=/usr/bin/ykchalresp
-	if [ -d "${TEMP}/initramfs-yubikey-temp" ]
+	if [ -d "${TDIR}" ]
 	then
-		rm -r "${TEMP}/initramfs-yubikey-temp/"
+		rm -r "${TDIR}" || gen_die "Failed to clean out existing '${TDIR}'!"
 	fi
 
-	mkdir -p "${TEMP}/initramfs-yubikey-temp/lib/yubikey/"
-	mkdir -p "${TEMP}/initramfs-yubikey-temp/usr/bin"
-	cd "${TEMP}/initramfs-yubikey-temp"
+	mkdir -p "${TDIR}/lib/yubikey/"
+	mkdir -p "${TDIR}/usr/bin"
+	cd "${TDIR}"
 
 	if isTrue "${YUBIKEY}"
 	then
 		[ -x "${_ykchalresp_source}" ] \
 				|| gen_die "$(printf "${_yubikey_error_format}" "no file ${_ykchalresp_source}")"
-
-		print_info 1 "$(getIndent 2)Yubikey: Adding support (using system binaries)..."
-		copy_binaries "${TEMP}/initramfs-yubikey-temp/" "${_ykchalresp_dest}"
+		print_info 2 "$(get_indent 2)${PN}: >> Adding YubiKey support into initramfs ..."
+		copy_binaries "${TDIR}/" "${_ykchalresp_dest}"
 	fi
 
+	cd "${TDIR}" || gen_die "Failed to chdir to '${TDIR}'!"
 	log_future_cpio_content
-	find . -print | cpio ${CPIO_ARGS} --append -F "${CPIO}" \
-		|| gen_die "appending yubikey to cpio"
 
-	cd "${TEMP}"
-	rm -r "${TEMP}/initramfs-yubikey-temp/"
+	find . -print0 | "${CPIO_COMMAND}" ${CPIO_ARGS} --append -F "${CPIO_ARCHIVE}" \
+		|| gen_die "Failed to append ${PN} to cpio!"
+
+	cd "${TEMP}" || die "Failed to chdir to '${TEMP}'!"
+	if isTrue "${CLEANUP}"
+	then
+		rm -rf "${TDIR}"
+	fi
 }
 
 append_firmware() {
@@ -1813,12 +1820,12 @@ create_initramfs() {
 	append_data 'lvm' "${LVM}"
 	append_data 'mdadm' "${MDADM}"
 	append_data 'modprobed'
-	append_data 'yubikey' "${YUBIKEY}"
 	append_data 'multipath' "${MULTIPATH}"
 	append_data 'splash' "${SPLASH}"
 	append_data 'strace' "${STRACE}"
 	append_data 'unionfs_fuse' "${UNIONFS}"
 	append_data 'xfsprogs' "${XFSPROGS}"
+	append_data 'yubikey' "${YUBIKEY}"
 	append_data 'zfs' "${ZFS}"
 
 	if isTrue "${ZFS}" || isTrue "${LUKS}" || isTrue "${YUBIKEY}"

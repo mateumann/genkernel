@@ -166,8 +166,8 @@ longusage() {
   echo "	--no-disklabel		Exclude disk label and uuid support in your initramfs"
   echo "	--luks			Include LUKS support"
   echo "	--no-luks		Exclude LUKS support"
-  echo "	--yubikey		Include Yubikey support"
-  echo "	--no-yubikey		Exclude Yubikey support"
+  echo "	--yubikey		Include Yubikey-armored LUKS key support"
+  echo "	--no-yubikey		Exclude Yubikey-armored LUKS key support"
   echo "	--gpg			Include GPG-armored LUKS key support"
   echo "	--no-gpg		Exclude GPG-armored LUKS key support"
   echo "	--b2sum			Include b2sum"
@@ -770,8 +770,8 @@ parse_cmdline() {
 			print_info 3 "CMD_LUKS: ${CMD_LUKS}"
 			;;
 		--yubikey|--no-yubikey)
-			CMD_YUBIKEY=`parse_optbool "$*"`
-			print_info 2 "CMD_YUBIKEY: ${CMD_YUBIKEY}"
+			CMD_YUBIKEY=$(parse_optbool "$*")
+			print_info 3 "CMD_YUBIKEY: ${CMD_YUBIKEY}"
 			;;
 		--gpg|--no-gpg)
 			CMD_GPG=$(parse_optbool "$*")
