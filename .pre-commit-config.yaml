@@ -1,0 +1,17 @@
+---
+#exclude: '^$'
+#fail_fast: false
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.2.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: https://github.com/GitGuardian/ggshield.git
+    rev: v1.7.2
+    hooks:
+      - id: ggshield
+        language_version: python3
+        stages: [commit]
